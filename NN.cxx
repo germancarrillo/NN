@@ -1,6 +1,7 @@
 #include <iostream>
 #include <iomanip>
 #include <vector>
+#include <queue>
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -11,7 +12,7 @@ using namespace std;
 
 #define verbose 0
 
-#define ZERO 0.0003
+#define ZERO 0.0001
 
 ///////////////////////////////////////////////////////////////////////////////////////
 
@@ -35,8 +36,11 @@ public:
   double processerror(vector<neuron> &outputlayer,double &desiredvalue);  
   vector<double> updateweights(double &learningrate,double &momentum);
   //
+  void setweight(uint i,double w){ weights[i]=w;};
   double getoutput(){return output;};
-  double getgraderror(){return graderror;};  
+  double getgraderror(){return graderror;};
+  double getweight(uint i){return weights[i];};
+  uint getnumweights(){return weights.size();}
 };
 
 uint neuron::totn=0;
@@ -110,8 +114,9 @@ public:
   bool estimatevalues(vector<double> event);
   bool estimateerrors();
   bool estimateweights();
-  bool stoptraining();
+  bool stoptraining(uint);
   bool test(vector<vector<double>> &inputsample);
+  bool load(queue<double> &inputweights);
   void printoutput(){ cout<<"\t === INFO:: Output value(s): "; for(auto n:layers.back()) cout<<n.getoutput()<<", ";  cout<<endl; };
   void printerror(){ cout<<"\t === INFO:: Error value(s): "; for(auto n:layers.back()) cout<<n.getgraderror()<<", ";  cout<<endl; };
 };
@@ -146,7 +151,6 @@ nnetwork::nnetwork(uint n_inputs_=0,uint n_hidlayers_=0,uint n_hidneurons_=0,uin
   cout<<"\t === INFO:: Output Layer created with "<<outlayer.size()<<" output neurons"<<endl;
 
   cout.setf(ios_base::fixed);  cout.precision(5);
-  coutweights.open("weights.dat"); coutweights.setf(ios_base::fixed);  coutweights.precision(3);
 };
 
 bool nnetwork::estimatevalues(vector<double> event){
@@ -177,16 +181,29 @@ bool nnetwork::estimateweights(){
   if(verbose) cout<<endl<<"\t === INFO:: verbose:: Updating weights"<<endl;
   for(int l=layers.size()-1;l>=0;l--)
     for(uint n=0;n<layers.at(l).size();n++)
-      layers.at(l).at(n).updateweights(learningrate,momentum);      
+      layers.at(l).at(n).updateweights(learningrate,momentum);
   return true;
 };
 
-bool nnetwork::stoptraining(){
+bool nnetwork::stoptraining(uint e){
   if(verbose) cout<<endl<<"\t === INFO:: verbose:: Checking stopping conditions"<<endl;
   double mse=0;
-  for(uint n=0;n<layers.back().size();n++)
-    mse += pow(layers.back().at(n).getoutput() - desiredvalues.at(n),2)/n_inputs;
-  if(mse<ZERO){ cout<<"\t === INFO:: Stoping and MSE "<<mse<<endl; return true; } 
+  for(uint n=0;n<layers.back().size();n++){
+    double outputval=layers.back().at(n).getoutput();
+    mse += pow(outputval - desiredvalues.at(n),2)/n_inputs;
+    //if(outputval<ZERO*0.1 || outputval>1-ZERO*0.1){ cout<<"\t === INFO:: Stoping becasue output value found to be unreasonable "<<outputval<<endl; return true; }
+  }
+  if(mse<ZERO){    
+    cout<<"\t === INFO:: Stoping after "<<e<<" epochs at a MSE of "<<mse<<endl; 
+    coutweights.open("weights.dat"); coutweights.setf(ios_base::fixed);  coutweights.precision(12);    
+    for(int l=0;l<layers.size();l++)
+      for(uint n=0;n<layers.at(l).size();n++)
+	for(uint i=0;i<layers.at(l).at(n).getnumweights();i++)
+	  coutweights<<layers.at(l).at(n).getweight(i)<<endl;
+
+    coutweights.close();
+    return true;
+  } 
   return false;
 };
 
@@ -211,7 +228,7 @@ bool nnetwork::train(vector<vector<double>> &inputsample,uint n_epoch_=1,double 
       this->estimateerrors();
       this->estimateweights();
       this->printoutput();
-      if(this->stoptraining()) break;
+      if(this->stoptraining(e)) break;
     }
   }
 
@@ -228,9 +245,23 @@ bool nnetwork::test(vector<vector<double>> &inputsample){
 
     for(uint n=0;n<layers.back().size();n++) if(layers.back().at(n).getoutput()>maxprob){ maxprob=layers.back().at(n).getoutput(); idval=n; }
     cout<<endl<<"\t === INFO:: Testing event, written: "<<inputvalue<<" observed: "<<idval<<endl;
+    this->printoutput(); 
   }  
   return true;  
 }; 
+
+bool nnetwork::load(queue<double> &inputweights){
+  cout<<"\t === INFO:: Loading NN weights, total number of weights "<<inputweights.size()<<endl;
+  
+  for(int l=0;l<layers.size();l++)
+    for(uint n=0;n<layers.at(l).size();n++)
+      for(uint i=0;i<layers.at(l).at(n).getnumweights();i++){
+	layers.at(l).at(n).setweight(i,inputweights.front());
+	inputweights.pop();
+      }
+
+  return true;
+};
 
 ///////////////////////////////////////////////////////////////////////////////////////
 
@@ -248,31 +279,73 @@ void loadinput(const char filename[],vector<vector<double>> &data){
   }
 };
 
+void loadweights(const char filename[],queue<double> &data){
+  ifstream f;  f.open(filename);     
+  double val=0;
+  while(f >> val)
+    data.push(val);  
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////
 
-int main(){
+int main(int argc, char* argv[]){
 
-  vector<vector<double>> inputsample_train;
-  loadinput("mnist/train.dat",inputsample_train);
+  if(argc>3){
+    char *train_filename    = argv[1];
+    char *test_filename     = argv[2];
+    char *validate_filename = argv[3];
 
-  vector<vector<double>> inputsample_test;
-  loadinput("mnist/gdc.dat",inputsample_test);
+    cout<<endl<<"\t === INFO:: New NN. Training sample "<<train_filename<<" testing "<<test_filename<<" validating "<<validate_filename<<endl;
 
-  //
-  uint inputsize=inputsample_train.at(0).size()-1;
-  uint hiddenlayers=1;
-  uint neuronsinhiddenl=inputsize*2;
-  uint outputs=10;
-  //
-  uint epochs=1000;
-  double learningrate=10;  
-  double momentum=0.2;
-  //
-  nnetwork *NN = new nnetwork(inputsize,hiddenlayers,neuronsinhiddenl,outputs);  
-  
-  NN->train(inputsample_train,epochs,learningrate,momentum);
-  NN->test(inputsample_test);
-  
+    vector<vector<double>> inputsample_train;
+    loadinput(train_filename,inputsample_train);
+    
+    vector<vector<double>> inputsample_test;
+    loadinput(test_filename,inputsample_test);
+
+    vector<vector<double>> inputsample_validate;
+    loadinput(validate_filename,inputsample_test);
+    
+    //
+    uint inputsize=inputsample_train.at(0).size()-1;
+    uint hiddenlayers=1;
+    uint neuronsinhiddenl=inputsize*2;
+    uint outputs=10;
+    //
+    uint epochs=1000;
+    double learningrate=0.0001;  
+    double momentum=0.9;
+    //
+    nnetwork *NN = new nnetwork(inputsize,hiddenlayers,neuronsinhiddenl,outputs);  
+    
+    NN->train(inputsample_train,epochs,learningrate,momentum);
+    NN->test(inputsample_test);    
+  }else if(argc>2){
+    char *weights_filename = argv[1];
+    char *test_filename    = argv[2];
+
+    cout<<endl<<"\t === INFO:: Loading NN. Weights from "<<weights_filename<<" testing input "<<test_filename<<endl;
+    
+    queue<double> inputweights;
+    loadweights(weights_filename,inputweights);
+    
+    vector<vector<double>> inputsample_test;
+    loadinput(test_filename,inputsample_test);
+    
+    //                                                                                                                                                                                                                                        
+    uint inputsize=inputsample_test.at(0).size()-1;
+    uint hiddenlayers=1;
+    uint neuronsinhiddenl=inputsize*2;
+    uint outputs=10;
+    //                                                                                                                                                                                                                                         
+    nnetwork *NN = new nnetwork(inputsize,hiddenlayers,neuronsinhiddenl,outputs);
+    
+    NN->load(inputweights);
+    NN->test(inputsample_test);
+    
+  }else    
+    cout<<"\t === INFO:: Arguments missing. Provide: train_filename test_filename and validation_filename, or weights_filename and test_filename"<<endl;
+																			 
   return 0; 
 }
 
